@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
@@ -10,10 +11,9 @@ namespace CSaN_1
     {
         [DllImport("iphlpapi.dll", ExactSpelling = true)]
         private static extern int SendARP(int DestIP, int SrcIP, byte[] pMacAddr, ref uint PhyAddrLen);
-
-        private static Dictionary<int, Boolean> nodeAddresses;
         private static void ProcessNetworkInterface(NetworkInterface networkInterface)
         {
+            if (networkInterface.OperationalStatus != OperationalStatus.Up) return;
             Console.WriteLine("--------------");
             Console.WriteLine("Network Interface: " + networkInterface.Description);
             var ipv4Mask = networkInterface.GetIPProperties().UnicastAddresses[1].IPv4Mask.GetAddressBytes();
@@ -25,9 +25,12 @@ namespace CSaN_1
                 Console.Write(b + ".");
             }
             Console.WriteLine();
-            if (nodeAddress[0] != 192 || nodeAddress[1] != 168 || nodeAddress[2] != 2 || nodeAddress[3] != 0) return;
-            if (nodeAddresses.ContainsKey(AddressToInt(nodeAddress))) return;
-            nodeAddresses.Add(AddressToInt(nodeAddress), true);
+            for (int i = 0; i < 2; i++)
+            {
+                byte buf = nodeAddress[i];
+                nodeAddress[i] = nodeAddress[3 - i];
+                nodeAddress[3 - i] = buf;
+            }
             CheckField(nodeAddress);
         }
 
@@ -49,26 +52,49 @@ namespace CSaN_1
             }
             if (isEndpoint) CheckAddress(nodeAddress);
         }
-
+        
         private static void CheckAddress(byte[] address)
         {
-            Console.Write("ip:");
-            foreach (var b in address)
-            {
-                Console.Write(b + ".");
-            }
-            Console.Write(": ");
             byte[] macAddress = new byte[6];
             uint macAddressLength = (uint) macAddress.Length;
             if (SendARP(AddressToInt(address), 0, macAddress, ref macAddressLength) == 0)
             {
-                Console.Write("Device: ");
-                for (int b = 0; b < 6; b++)
+                Console.Write("ip:");
+                for (int i = 3; i > 0; i--)
                 {
-                    Console.Write(Convert.ToString(macAddress[b], 16) + ":");
+                    Console.Write(address[i] + ".");
                 }
+                Console.Write(address[0] + ": ");
+                Console.Write("Device: ");
+                string mac = "";
+                for (int b = 0; b < macAddressLength - 1; b++)
+                {
+                    mac += (Convert.ToString(macAddress[b], 16) + ":");
+                }
+                mac += Convert.ToString(macAddress[macAddressLength - 1], 16);
+                Console.Write(mac + " ");
+
+                try
+                {
+                    WebRequest request = WebRequest.Create("https://api.macvendors.com/" + mac);
+                    using (WebResponse response = request.GetResponse())
+                    {
+                        using (Stream stream = response.GetResponseStream())
+                        {
+                            using (StreamReader streamReader = new StreamReader(stream))
+                            {
+                                string vendor = streamReader.ReadLine();
+                                Console.Write("Vendor: " + vendor);
+                            }
+                        }
+                    }
+                }
+                catch (WebException e)
+                {
+                    Console.Write("Vendor not found");
+                }
+                Console.WriteLine();
             }
-            Console.WriteLine();
         }
 
         private static int AddressToInt(byte[] address)
@@ -94,13 +120,14 @@ namespace CSaN_1
 
         public static void Main(string[] args)
         {
-            nodeAddresses = new Dictionary<int, Boolean>();
             
             var networkInterfaces = NetworkInterface.GetAllNetworkInterfaces();
             foreach (var networkInterface in networkInterfaces)
             {
                 ProcessNetworkInterface(networkInterface);
             }
+            
+            
         }
     }
 }
